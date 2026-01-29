@@ -1,0 +1,288 @@
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+
+# --- CONFIGURATION ---
+# --- CONFIGURATION ---
+st.set_page_config(page_title="EV Strategy Hub", layout="wide", initial_sidebar_state="expanded")
+
+# --- CUSTOM CSS STYLING ---
+st.markdown("""
+<style>
+    /* Main Background and Text */
+    .stApp {
+        background-color: #0E1117;
+        color: #FFFFFF;
+    }
+    
+    /* Text Visibility Enhancements */
+    p, li, span, div {
+        color: #E6E6E6;
+        font-size: 18px; /* Increased from 16px */
+    }
+    
+    /* Card Styling for Metrics */
+    div[data-testid="stMetric"] {
+        background-color: #262730;
+        border: 1px solid #464B5C;
+        padding: 20px; /* Increased padding */
+        border-radius: 12px;
+        box-shadow: 2px 2px 8px rgba(0,0,0,0.4);
+    }
+    
+    div[data-testid="stMetric"] label {
+        color: #B0B0B0 !important;
+        font-size: 16px !important; /* Larger label */
+    }
+    
+    div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+        color: #FFFFFF !important;
+        font-size: 36px !important; /* Larger value */
+    }
+    
+    div[data-testid="stMetric"]:hover {
+        border-color: #FF4B4B;
+    }
+    
+    /* Header Styling */
+    h1, h2, h3 {
+        color: #FF6B6B !important; /* Brighter Red/Pink */
+        font-family: 'Segoe UI', sans-serif;
+        text-shadow: 1px 1px 2px black;
+    }
+    
+    /* Sidebar Styling */
+    section[data-testid="stSidebar"] {
+        background-color: #1A1C24;
+    }
+    
+    /* Chart Container Styling */
+    .stPlotlyChart {
+        background-color: #262730;
+        border-radius: 10px;
+        padding: 10px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.title("🚗 EV Population & Infrastructure Strategy Dashboard")
+st.markdown("### *Derived insights for sustainable transportation growth.*")
+st.divider()
+
+# --- MOCK DATA GENERATION (Simulating a real dataset) ---
+@st.cache_data
+def load_data():
+    # Data Estimates based on 2024-2025 Research (Vahan, State Transport Depts)
+    # Note: Precise city-level live counts are estimates derived from state data & market trends.
+    data = {
+        'City': ['Bengaluru', 'New Delhi', 'Mumbai', 'Chennai',
+                 'Hyderabad', 'Kolkata', 'Ahmedabad', 'Pune'],
+        'EV_Count': [155000, 220000, 95000, 85000,
+                     72000, 45000, 38000, 110000], 
+        'Avg_Range': [185, 180, 175, 190,
+                      188, 170, 182, 178], # Avg real-world range considering traffic/climate
+        'BEV_Share': [0.92, 0.88, 0.90, 0.93,
+                      0.91, 0.85, 0.89, 0.94], # Dominance of BEV 2W/3W/4W
+        'Public_Chargers': [3200, 4500, 1500, 1100,
+                            950, 450, 600, 1200], # Public charging points
+        'Growth_Rate': [45, 18, 55, 30,
+                        35, 25, 40, 50], # 2024-25 YoY Growth estimates
+        'Safety_Index': [8.2, 5.8, 7.5, 7.9,
+                         7.6, 6.2, 7.1, 7.4] # Calculated proxy based on Infra/Density/Climate risk
+    }
+    
+    df = pd.DataFrame(data)
+    
+    # Real-world Fuel Mix Estimates (approximate % share in fleet)
+    # Delhi/Gujarat have high CNG. South/West have high Petrol/Diesel.
+    # Logic: EV Count is ~2-6% of total. We extrapolate total fleet from EV count & penetration, then apply mix.
+    
+    # Mix Defaults (Petrol, Diesel, CNG)
+    mix_map = {
+        'New Delhi': [0.45, 0.18, 0.32], # High CNG
+        'Ahmedabad': [0.35, 0.25, 0.38], # High CNG
+        'Mumbai':    [0.36, 0.20, 0.36], # Mix
+        'Bengaluru': [0.62, 0.17, 0.12], # High Petrol
+        'Pune':      [0.55, 0.30, 0.08],
+        'Chennai':   [0.58, 0.30, 0.05],
+        'Hyderabad': [0.55, 0.35, 0.05],
+        'Kolkata':   [0.40, 0.45, 0.05]  # High Diesel
+    }
+
+    p_list, d_list, c_list = [], [], []
+    
+    for i, row in df.iterrows():
+        city = row['City']
+        ev_c = row['EV_Count']
+        # Assume EV is approx 3-5% of active fleet to find Total
+        total_fleet = ev_c * 25 
+        
+        mix = mix_map.get(city, [0.5, 0.3, 0.1])
+        p_list.append(int(total_fleet * mix[0]))
+        d_list.append(int(total_fleet * mix[1]))
+        c_list.append(int(total_fleet * mix[2]))
+
+    df['Petrol_Count'] = p_list
+    df['Diesel_Count'] = d_list
+    df['CNG_Count'] = c_list
+    df['EV_New_Registrations'] = (df['EV_Count'] * (df['Growth_Rate'] / 100)).astype(int)
+    return df
+
+df = load_data()
+
+# --- SIDEBAR FILTERS ---
+st.sidebar.header("Filter & Strategy")
+region_filter = st.sidebar.multiselect("Select Cities", df['City'].unique(), default=df['City'].unique())
+filtered_df = df[df['City'].isin(region_filter)]
+
+st.sidebar.divider()
+st.sidebar.header("🔮 Simulation Parameters")
+growth_multiplier = st.sidebar.slider("Growth Rate Multiplier", 0.5, 3.0, 1.0, 0.1, help="Simulate faster or slower adoption")
+years_forecast = st.sidebar.slider("Projection Years", 1, 5, 3)
+new_chargers = st.sidebar.number_input("Add Theoretical Chargers", 0, 50000, 0, 100)
+
+# --- ROW 1: TOP LEVEL KPIs ---
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Total EVs in Region", f"{filtered_df['EV_Count'].sum():,}")
+col2.metric("Avg. Battery Range", f"{int(filtered_df['Avg_Range'].mean())} mi")
+col3.metric("Charger-to-EV Ratio", f"1:{int(filtered_df['EV_Count'].sum() / filtered_df['Public_Chargers'].sum())}")
+col4.metric("Avg. Growth", f"{filtered_df['Growth_Rate'].mean()}%", "+2.4%")
+
+st.divider()
+
+# --- ROW 2: GEOGRAPHIC & MARKET INSIGHTS ---
+col_left, col_right = st.columns(2)
+
+with col_left:
+    st.subheader("📍 Infrastructure Gap Analysis")
+    # A bubble chart showing EV density vs Charger availability
+    fig_gap = px.scatter(filtered_df, x="EV_Count", y="Public_Chargers", 
+                 size="Growth_Rate", color="City",
+                 hover_name="City", title="EV Population vs. Available Infrastructure")
+    st.plotly_chart(fig_gap, use_container_width=True)
+    st.caption("Insights: Cities in the bottom-right are underserved and require immediate charging investment.")
+
+with col_right:
+    st.subheader("🔋 Market Composition (BEV vs PHEV)")
+    fig_pie = px.pie(filtered_df, values='BEV_Share', names='City', hole=0.4,
+                     title="Distribution of Full Battery EVs (BEV)")
+    st.plotly_chart(fig_pie, use_container_width=True)
+
+# --- ROW 3: SAFETY & COMPLIANCE ---
+st.divider()
+st.subheader("🛡️ Safety & Compliance Standards")
+s_col1, s_col2 = st.columns([3, 1])
+
+with s_col1:
+    fig_safe = px.bar(filtered_df, x='City', y='Safety_Index', color='Safety_Index',
+                      color_continuous_scale='RdYlGn', range_y=[0, 10],
+                      title="EV Ecosystem Safety Index (0-10)")
+    st.plotly_chart(fig_safe, use_container_width=True)
+
+with s_col2:
+    avg_safety = filtered_df['Safety_Index'].mean()
+    st.metric("Avg. Safety Score", f"{avg_safety:.1f}/10")
+    if avg_safety < 7.0:
+        st.error("Region requires safety upgrades.")
+    else:
+        st.success("Region meets safety standards.")
+
+# --- ROW 4: VEHICLE TYPE COMPARISON ---
+st.divider()
+st.subheader("🚗 Vehicle Fleet Mix Strategy")
+
+# Melting dataframe for stacked bar chart
+melted_df = filtered_df.melt(id_vars=['City'], 
+                             value_vars=['EV_Count', 'Petrol_Count', 'Diesel_Count', 'CNG_Count'],
+                             var_name='Fuel_Type', value_name='Count')
+
+fig_stack = px.bar(melted_df, x='City', y='Count', color='Fuel_Type', 
+                   title="Current Vehicle Fleet Mix by City", barmode='group')
+st.plotly_chart(fig_stack, use_container_width=True)
+
+
+
+# --- ROW 6: FUTURE SCENARIOS & PREDICTIVE ANALYSIS ---
+st.divider()
+st.subheader("🔮 Predictive & What-If Analysis")
+st.info(f"Scenario: {years_forecast}-Year Projection with {growth_multiplier}x Growth Rate & +{new_chargers} Chargers")
+
+sim_df = filtered_df.copy()
+# Calculate Future EV Counts (Compound Annual Growth)
+sim_df['Future_EV_Count'] = (sim_df['EV_Count'] * ((1 + (sim_df['Growth_Rate'] * growth_multiplier)/100) ** years_forecast)).astype(int)
+sim_df['Projected_Increase'] = sim_df['Future_EV_Count'] - sim_df['EV_Count']
+
+# Calculate Future Charger Ratio
+total_current_chargers = sim_df['Public_Chargers'].sum()
+total_future_chargers = total_current_chargers + new_chargers
+total_future_evs = sim_df['Future_EV_Count'].sum()
+future_ratio = int(total_future_evs / total_future_chargers) if total_future_chargers > 0 else 0
+
+# CO2 Savings (Approx 2.5 tons per EV per year)
+co2_savings = (sim_df['Future_EV_Count'].sum() * 2.5 * years_forecast) / 1000 # in Kilotons
+
+scen_col1, scen_col2 = st.columns([2, 1])
+
+with scen_col1:
+    # Comparison Chart
+    fig_sim = go.Figure()
+    fig_sim.add_trace(go.Bar(x=sim_df['City'], y=sim_df['EV_Count'], name='Current EVs', marker_color='#1f77b4'))
+    fig_sim.add_trace(go.Bar(x=sim_df['City'], y=sim_df['Projected_Increase'], name=f'+{years_forecast}yr Growth', marker_color='#2ca02c'))
+    fig_sim.update_layout(title=f"Projected EV Fleet Size ({years_forecast} Years)", barmode='stack')
+    st.plotly_chart(fig_sim, use_container_width=True)
+
+with scen_col2:
+    st.markdown("#### Impact Analysis")
+    st.metric(f"Projected Total EVs (Year {years_forecast})", f"{total_future_evs:,}", f"+{sim_df['Projected_Increase'].sum():,}")
+    
+    ratio_delta = future_ratio - int(sim_df['EV_Count'].sum() / sim_df['Public_Chargers'].sum())
+    st.metric("Projected Charger Ratio (1:N)", f"1:{future_ratio}", f"{ratio_delta} vehicles/charger", delta_color="inverse")
+    
+    st.metric("Est. CO2 Emissions Avoided", f"{co2_savings:,.1f} kt", help="Based on 2.5 tons saved per EV/year")
+    
+    if future_ratio > 15:
+        st.warning(f"⚠️ Infrastructure Gap: Ratio of 1:{future_ratio} is critical. Add {int(total_future_evs/15 - total_future_chargers):,} more chargers.")
+    else:
+        st.success("✅ Sustainable Infrastructure Growth maintained.")
+
+# Gap Analysis Chart (New Forecast)
+st.markdown("#### 📉 Infrastructure Gap Forecast")
+trend_data = []
+current_evs = filtered_df['EV_Count'].sum()
+current_chargers = filtered_df['Public_Chargers'].sum()
+
+for y in range(years_forecast + 1):
+    ev_proj = current_evs * ((1 + (filtered_df['Growth_Rate'].mean() * growth_multiplier)/100) ** y)
+    req_chargers = ev_proj / 15 # Target 1:15 ratio
+    # Assumed organic infrastructure growth of 20%
+    planned_chargers = current_chargers * ((1 + 0.20) ** y) + (new_chargers if y > 0 else 0)
+    
+    trend_data.append({
+        "Year": f"Year {y}",
+        "Required Chargers": int(req_chargers),
+        "Planned Chargers": int(planned_chargers),
+        "Gap": int(req_chargers - planned_chargers)
+    })
+
+trend_df = pd.DataFrame(trend_data)
+fig_gap_trend = px.line(trend_df, x="Year", y=["Required Chargers", "Planned Chargers"], markers=True,
+                        title="Projected Charger Demand vs Supply (Gap Analysis)",
+                        color_discrete_map={"Required Chargers": "red", "Planned Chargers": "green"})
+st.plotly_chart(fig_gap_trend, use_container_width=True)
+st.caption("Red line vs Green line divergence indicates the widening infrastructure gap if no intervention occurs.")
+
+# --- ROW 7: ENVIRONMENTAL IMPACT ---
+st.divider()
+st.subheader("ODG Sustainable Impact Tracker")
+
+# Calculations
+filtered_df['CO2_Saved_Tons'] = filtered_df['EV_Count'] * 1.8 # Approx 1.8 tons saved per EV annually
+filtered_df['Fuel_Saved_Liters'] = filtered_df['EV_Count'] * 800 # Approx 800L fuel saved annually
+filtered_df['Trees_Equivalent'] = (filtered_df['CO2_Saved_Tons'] * 1000) / 20 # 20kg absorption per tree
+
+# Metrics
+env_col1, env_col2, env_col3 = st.columns(3)
+env_col1.metric("🌱 CO2 Emissions Saved", f"{filtered_df['CO2_Saved_Tons'].sum():,.0f} Tons", help="Vs Internal Combustion Engine vehicles")
+env_col2.metric("💧 Fuel Saved", f"{filtered_df['Fuel_Saved_Liters'].sum() / 1000000:.1f} M Liters", help="Petrol/Diesel avoided")
+env_col3.metric("
